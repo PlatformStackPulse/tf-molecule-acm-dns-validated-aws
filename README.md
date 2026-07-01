@@ -1,6 +1,36 @@
 # tf-molecule-acm-dns-validated-aws
 
-Terraform molecule (PlatformStackPulse). See the module documentation below.
+Terraform molecule that provisions an AWS ACM certificate and validates it automatically via Route53 DNS records — returning a ready-to-use, fully validated certificate ARN.
+
+## Features
+
+- Requests a public **ACM certificate** for a primary domain plus optional Subject Alternative Names (SANs).
+- Uses **DNS validation** and creates the required **Route53 validation records** in the supplied hosted zone (`allow_overwrite = true`, 60s TTL).
+- Waits for validation to complete via `aws_acm_certificate_validation`, so the emitted `certificate_arn` is safe to attach to CloudFront, ALB, or API Gateway.
+- `create_before_destroy` lifecycle on the certificate for zero-downtime rotation.
+- Full [tf-label](https://github.com/PlatformStackPulse/tf-label) context support (`namespace`, `stage`, `name`, tags, `enabled`, ...) for consistent naming and tagging.
+- Toggle everything off with `enabled = false` — the module then creates no resources.
+
+## Usage
+
+```hcl
+module "acm" {
+  source = "git::https://github.com/PlatformStackPulse/tf-molecule-acm-dns-validated-aws.git?ref=v1.0.0"
+
+  namespace = "eg"
+  stage     = "prod"
+  name      = "web"
+
+  domain_name               = "app.example.com"
+  subject_alternative_names = ["www.example.com"]
+  zone_id                   = "Z1234567890ABCDEFGHIJ"
+}
+
+# Fully validated certificate ARN, ready to attach to CloudFront/ALB/API Gateway
+output "certificate_arn" {
+  value = module.acm.certificate_arn
+}
+```
 
 <!-- BEGIN_TF_DOCS -->
 ### Requirements
@@ -62,3 +92,24 @@ Terraform molecule (PlatformStackPulse). See the module documentation below.
 | <a name="output_certificate_arn"></a> [certificate\_arn](#output\_certificate\_arn) | ARN of the validated ACM certificate |
 | <a name="output_domain_name"></a> [domain\_name](#output\_domain\_name) | Primary domain name of the certificate |
 <!-- END_TF_DOCS -->
+
+## Tests
+
+Unit tests run against a **mock AWS provider** (no real AWS calls, no credentials) and assert on plan-known values only — the tf-label id, input pass-throughs, and resource counts.
+
+```bash
+# Run unit tests
+terraform init -backend=false
+terraform test -test-directory=tests/unit
+
+# Or via Makefile
+make test-unit
+```
+
+Coverage (`tests/unit/main_test.tftest.hcl`):
+
+- `disabled_creates_nothing` — `enabled = false` plans zero certificate, validation, and Route53 records, and both the `certificate_arn` and `domain_name` outputs are empty.
+
+> The **enabled** path is exercised by the integration tests, not the unit tests. `aws_route53_record.validation` derives its `for_each` keys from the certificate's computed `domain_validation_options` (unknown until apply), which Terraform rejects at plan time under a mock provider — so the enabled path cannot run offline with `terraform test`.
+
+Integration tests (`tests/integration/`, require real AWS credentials) run with `make test-integration`.
